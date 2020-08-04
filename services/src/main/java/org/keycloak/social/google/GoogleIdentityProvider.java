@@ -22,12 +22,15 @@ import org.keycloak.broker.oidc.OIDCIdentityProviderConfig;
 import org.keycloak.broker.provider.AuthenticationRequest;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
+import org.keycloak.broker.provider.util.SimpleHttp.Response;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.common.ClientConnection;
 import org.keycloak.common.util.KeycloakUriBuilder;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.representations.JsonWebToken;
+
+import java.io.IOException;
 
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.UriBuilder;
@@ -40,7 +43,9 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
     public static final String AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
     public static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
     public static final String PROFILE_URL = "https://openidconnect.googleapis.com/v1/userinfo";
+    public static final String GROUPS_URL = "https://www.googleapis.com/admin/directory/v1/groups";
     public static final String DEFAULT_SCOPE = "openid profile email";
+    public static final String GROUP_SCOPE = "openid https://www.googleapis.com/auth/admin.directory.group.readonly";
 
     private static final String OIDC_PARAMETER_HOSTED_DOMAINS = "hd";
     private static final String OIDC_PARAMETER_ACCESS_TYPE = "access_type";
@@ -128,6 +133,45 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
         }
 
         throw new IdentityBrokerException("Hosted domain does not match.");
+    }
+
+
+    @Override
+    protected BrokeredIdentityContext validateExternalTokenThroughUserInfo(EventBuilder event, String subjectToken, String subjectTokenType) {
+
+        Response userInfoResponse = null;
+        Response userGroupsResponse = null;
+        int userInfoStatus = 0;
+        int userGroupsStatus = 0;
+
+        try {
+            String userInfoUrl = getUserInfoUrl();
+            userInfoResponse = buildUserInfoRequest(subjectToken, userInfoUrl).asResponse();
+            userInfoStatus = userInfoResponse.getStatus();
+        } catch (IOException e) {
+            logger.debug("Failed to invoke user info for external exchange", e);
+        }
+
+        // TODO: check if status == 200
+
+        try {
+            // TODO: make sure function works with groups or create new function
+            userGroupsResponse = buildUserInfoRequest(subjectToken, GROUPS_URL).asResponse();
+            userGroupsStatus = userGroupsResponse.getStatus();
+        } catch (IOException e) {
+            logger.debug("Failed to invoke user info for external exchange", e);
+        }
+
+        // TODO: check if status == 200
+
+        // TODO: mapping all group / user info from JSON
+
+        // TODO: get id
+        String id = "";
+        BrokeredIdentityContext user = new BrokeredIdentityContext(id);
+
+        
+        return user;
     }
 
 }
