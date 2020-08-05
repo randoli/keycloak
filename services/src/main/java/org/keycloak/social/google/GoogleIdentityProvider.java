@@ -17,23 +17,31 @@
 package org.keycloak.social.google;
 
 import org.keycloak.OAuth2Constants;
+import org.keycloak.OAuthErrorException;
 import org.keycloak.broker.oidc.OIDCIdentityProvider;
 import org.keycloak.broker.oidc.OIDCIdentityProviderConfig;
 import org.keycloak.broker.provider.AuthenticationRequest;
 import org.keycloak.broker.provider.BrokeredIdentityContext;
 import org.keycloak.broker.provider.IdentityBrokerException;
-import org.keycloak.broker.provider.util.SimpleHttp.Response;
+import org.keycloak.broker.provider.util.SimpleHttp;
 import org.keycloak.broker.social.SocialIdentityProvider;
 import org.keycloak.common.ClientConnection;
 import org.keycloak.common.util.KeycloakUriBuilder;
+import org.keycloak.events.Details;
+import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.representations.JsonWebToken;
+import org.keycloak.services.ErrorResponseException;
 
 import java.io.IOException;
 
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.UriBuilder;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
+import javax.ws.rs.core.Response;
 
 /**
  * @author <a href="mailto:sthorger@redhat.com">Stian Thorgersen</a>
@@ -45,7 +53,7 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
     public static final String PROFILE_URL = "https://openidconnect.googleapis.com/v1/userinfo";
     public static final String GROUPS_URL = "https://www.googleapis.com/admin/directory/v1/groups";
     public static final String DEFAULT_SCOPE = "openid profile email";
-    public static final String GROUP_SCOPE = "openid https://www.googleapis.com/auth/admin.directory.group.readonly";
+    public static final String GROUP_SCOPE = "https://www.googleapis.com/auth/admin.directory.group.readonly";
 
     private static final String OIDC_PARAMETER_HOSTED_DOMAINS = "hd";
     private static final String OIDC_PARAMETER_ACCESS_TYPE = "access_type";
@@ -135,43 +143,80 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
         throw new IdentityBrokerException("Hosted domain does not match.");
     }
 
+    @Override
+	protected String getProfileEndpointForValidation(EventBuilder event) {
+		return PROFILE_URL;
+	}
 
     @Override
     protected BrokeredIdentityContext validateExternalTokenThroughUserInfo(EventBuilder event, String subjectToken, String subjectTokenType) {
-
-        Response userInfoResponse = null;
-        Response userGroupsResponse = null;
-        int userInfoStatus = 0;
-        int userGroupsStatus = 0;
-
-        try {
-            String userInfoUrl = getUserInfoUrl();
-            userInfoResponse = buildUserInfoRequest(subjectToken, userInfoUrl).asResponse();
-            userInfoStatus = userInfoResponse.getStatus();
-        } catch (IOException e) {
-            logger.debug("Failed to invoke user info for external exchange", e);
-        }
-
-        // TODO: check if status == 200
-
-        try {
-            // TODO: make sure function works with groups or create new function
-            userGroupsResponse = buildUserInfoRequest(subjectToken, GROUPS_URL).asResponse();
-            userGroupsStatus = userGroupsResponse.getStatus();
-        } catch (IOException e) {
-            logger.debug("Failed to invoke user info for external exchange", e);
-        }
-
-        // TODO: check if status == 200
-
-        // TODO: mapping all group / user info from JSON
-
-        // TODO: get id
-        String id = "";
-        BrokeredIdentityContext user = new BrokeredIdentityContext(id);
-
         
-        return user;
+        event.detail("validation_method", "user info");
+        SimpleHttp.Response response = null;
+        int status = 0;
+        
+        try {
+            String userInfoUrl = getProfileEndpointForValidation(event);
+            response = buildUserInfoRequest(subjectToken, userInfoUrl).asResponse();
+            status = response.getStatus();
+        } catch (IOException e) {
+            logger.debug("Failed to invoke user info for external exchange", e);
+        }
+        
+        if (status != 200) {
+            logger.debug("Failed to invoke user info status: " + status);
+            event.detail(Details.REASON, "user info call failure");
+            event.error(Errors.INVALID_TOKEN);
+            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
+        }
+        
+        JsonNode profile = null;
+        
+        try {
+            profile = response.asJson();
+        } catch (IOException e) {
+            event.detail(Details.REASON, "user info call failure");
+            event.error(Errors.INVALID_TOKEN);
+            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
+        }
+        
+        BrokeredIdentityContext context = extractIdentityFromProfile(event, profile);
+        
+        if (context.getId() == null) {
+            event.detail(Details.REASON, "user info call failure");
+            event.error(Errors.INVALID_TOKEN);
+            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
+        }
+
+        // TODO: possibly return BrokeredIdentityContext
+        extractGroupInfo(profile, subjectToken, event);
+        
+        return context;
+    }
+
+    private void extractGroupInfo(JsonNode profile, String subjectToken, EventBuilder event) {
+
+        GoogleIdentityProviderConfig config = (GoogleIdentityProviderConfig)getConfig();
+
+        // TODO: make sure getDefaultScope() is correct
+        if (config.getDefaultScope().contains(GROUP_SCOPE)) {
+
+            // Get group info from endpoint
+            SimpleHttp.Response response = null;
+            int status = 0;
+
+            try {
+                response = SimpleHttp.doGet(GROUPS_URL, session)
+                            .header("Authorization", "Bearer " + subjectToken).asResponse();
+                status = response.getStatus();
+            }
+            catch (IOException e) {
+                logger.debug("Failed to invoke group info", e);
+            }
+
+            String id = getJsonProperty(profile, "id");
+            BrokeredIdentityContext user = new BrokeredIdentityContext(id);
+        }
     }
 
 }
