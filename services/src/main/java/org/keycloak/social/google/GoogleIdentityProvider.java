@@ -35,6 +35,8 @@ import org.keycloak.representations.JsonWebToken;
 import org.keycloak.services.ErrorResponseException;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.UriBuilder;
@@ -58,6 +60,7 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
     private static final String OIDC_PARAMETER_HOSTED_DOMAINS = "hd";
     private static final String OIDC_PARAMETER_ACCESS_TYPE = "access_type";
     private static final String ACCESS_TYPE_OFFLINE = "offline";
+    private static final String ATTRIBUTE_GOOGLE_GROUP = "google_group";
 
     public GoogleIdentityProvider(KeycloakSession session, GoogleIdentityProviderConfig config) {
         super(session, config);
@@ -151,6 +154,8 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
     @Override
     protected BrokeredIdentityContext validateExternalTokenThroughUserInfo(EventBuilder event, String subjectToken, String subjectTokenType) {
         
+        logger.info("Calling validateExternalTokenThroughUserInfo() in Google IDP.");
+        
         event.detail("validation_method", "user info");
         SimpleHttp.Response response = null;
         int status = 0;
@@ -188,35 +193,60 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
             throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
         }
 
-        // TODO: possibly return BrokeredIdentityContext
-        extractGroupInfo(profile, subjectToken, event);
+        GoogleIdentityProviderConfig config = (GoogleIdentityProviderConfig)getConfig();
+
+        logger.info("Attempting to get group info. Default Scope: " + config.getDefaultScope().toString());
+
+        // if (config.getDefaultScope().contains(GROUP_SCOPE)) {
+            context = extractGroupInfo(profile, subjectToken, event, context);
+        // }        
         
         return context;
     }
 
-    private void extractGroupInfo(JsonNode profile, String subjectToken, EventBuilder event) {
+    private BrokeredIdentityContext extractGroupInfo(JsonNode userProfile, String subjectToken, EventBuilder event, BrokeredIdentityContext user) {
 
-        GoogleIdentityProviderConfig config = (GoogleIdentityProviderConfig)getConfig();
+        // Get group info from endpoint
+        SimpleHttp.Response response = null;
+        int status = 0;
 
-        // TODO: make sure getDefaultScope() is correct
-        if (config.getDefaultScope().contains(GROUP_SCOPE)) {
-
-            // Get group info from endpoint
-            SimpleHttp.Response response = null;
-            int status = 0;
-
-            try {
-                response = SimpleHttp.doGet(GROUPS_URL, session)
-                            .header("Authorization", "Bearer " + subjectToken).asResponse();
-                status = response.getStatus();
-            }
-            catch (IOException e) {
-                logger.debug("Failed to invoke group info", e);
-            }
-
-            String id = getJsonProperty(profile, "id");
-            BrokeredIdentityContext user = new BrokeredIdentityContext(id);
+        try {
+            response = SimpleHttp.doGet(GROUPS_URL, session)
+                        .header("Authorization", "Bearer " + subjectToken).asResponse();
+            status = response.getStatus();
+            logger.info("Getting Google group info from endpoint. Status: " + status);
+            logger.info("Response: " + response.asString());
         }
-    }
+        catch (IOException e) {
+            logger.debug("Failed to invoke group info", e);
+        }
 
+        if (status != 200) {
+            logger.debug("Failed to invoke group info status: " + status);
+            event.detail(Details.REASON, "group info call failure");
+            event.error(Errors.INVALID_TOKEN);
+            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
+        }
+
+        // convert group info response into JSON object
+        JsonNode groupProfile = null;
+
+        try {
+            groupProfile = response.asJson();
+        } catch (IOException e) {
+            logger.debug("Failed to invoke group info as JSON", e);
+            event.detail(Details.REASON, "group info call failure");
+            event.error(Errors.INVALID_TOKEN);
+            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
+        }
+
+        List<String> groups = new ArrayList<String>();
+
+        for (JsonNode groupNode : groupProfile.get("groups")) {
+            groups.add(groupNode.get("id").asText());
+        }
+        
+        user.setUserAttribute(ATTRIBUTE_GOOGLE_GROUP, groups);
+        return user;
+    }
 }
