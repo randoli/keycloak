@@ -30,7 +30,11 @@ import org.keycloak.common.util.KeycloakUriBuilder;
 import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.events.EventBuilder;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.models.UserModel;
+import org.keycloak.models.UserSessionModel;
+import org.keycloak.representations.AccessTokenResponse;
 import org.keycloak.representations.JsonWebToken;
 import org.keycloak.services.ErrorResponseException;
 
@@ -40,6 +44,7 @@ import java.util.List;
 
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.UriBuilder;
+import javax.ws.rs.core.UriInfo;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -104,11 +109,18 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
 
     @Override
     protected BrokeredIdentityContext exchangeExternalImpl(EventBuilder event, MultivaluedMap<String, String> params) {
+        logger.info("*************************************************************");
+        logger.info("Calling exchangeExternalImpl() in Google IDP.");
+        logger.info("*************************************************************");
         return exchangeExternalUserInfoValidationOnly(event, params);
     }
 
     @Override
     protected UriBuilder createAuthorizationUrl(AuthenticationRequest request) {
+        logger.info("*************************************************************");
+        logger.info("Calling createAuthorizationUrl() in Google IDP.");
+        logger.info("*************************************************************");
+
         UriBuilder uriBuilder = super.createAuthorizationUrl(request);
         final GoogleIdentityProviderConfig googleConfig = (GoogleIdentityProviderConfig) getConfig();
         String hostedDomain = googleConfig.getHostedDomain();
@@ -126,6 +138,11 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
 
     @Override
     protected JsonWebToken validateToken(final String encodedToken, final boolean ignoreAudience) {
+        logger.info("*************************************************************");
+        logger.info("Calling validateToken() in Google IDP.");
+        logger.info("encodedToken: " + encodedToken);
+        logger.info("*************************************************************");
+
         JsonWebToken token = super.validateToken(encodedToken, ignoreAudience);
         String hostedDomain = ((GoogleIdentityProviderConfig) getConfig()).getHostedDomain();
 
@@ -149,104 +166,105 @@ public class GoogleIdentityProvider extends OIDCIdentityProvider implements Soci
     @Override
 	protected String getProfileEndpointForValidation(EventBuilder event) {
 		return PROFILE_URL;
-	}
+    }
 
     @Override
-    protected BrokeredIdentityContext validateExternalTokenThroughUserInfo(EventBuilder event, String subjectToken, String subjectTokenType) {
-        
-        logger.info("Calling validateExternalTokenThroughUserInfo() in Google IDP.");
-        
-        event.detail("validation_method", "user info");
-        SimpleHttp.Response response = null;
-        int status = 0;
-        
-        try {
-            String userInfoUrl = getProfileEndpointForValidation(event);
-            response = buildUserInfoRequest(subjectToken, userInfoUrl).asResponse();
-            status = response.getStatus();
-        } catch (IOException e) {
-            logger.debug("Failed to invoke user info for external exchange", e);
-        }
-        
-        if (status != 200) {
-            logger.debug("Failed to invoke user info status: " + status);
-            event.detail(Details.REASON, "user info call failure");
-            event.error(Errors.INVALID_TOKEN);
-            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
-        }
-        
-        JsonNode profile = null;
-        
-        try {
-            profile = response.asJson();
-        } catch (IOException e) {
-            event.detail(Details.REASON, "user info call failure");
-            event.error(Errors.INVALID_TOKEN);
-            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
-        }
-        
-        BrokeredIdentityContext context = extractIdentityFromProfile(event, profile);
-        
-        if (context.getId() == null) {
-            event.detail(Details.REASON, "user info call failure");
-            event.error(Errors.INVALID_TOKEN);
-            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
-        }
+    protected void processAccessTokenResponse(BrokeredIdentityContext context, AccessTokenResponse response) {
+        logger.info("*************************************************************");
+        logger.info("Calling processAccessTokenResponse() in Google IDP.");
+        logger.info("ID token: " + response.getIdToken());
+        logger.info("Token: " + response.getToken());
+        logger.info("*************************************************************");
+        super.processAccessTokenResponse(context, response);
 
+        logger.info("Calling getGroupInformation() with IdToken.");
+        getGroupInformation(response.getIdToken());
+        logger.info("Calling getGroupInformation() with Token.");
+        getGroupInformation(response.getToken());
+    }
+    
+    @Override
+    protected Response exchangeSessionToken(UriInfo uriInfo, EventBuilder event, ClientModel authorizedClient,
+            UserSessionModel tokenUserSession, UserModel tokenSubject) {
+        logger.info("*************************************************************");
+        logger.info("Calling exchangeSessionToken() in Google IDP.");
+        logger.info("tokenUserSession: " + tokenUserSession);
+        logger.info("tokenSubject: " + tokenSubject);
+        logger.info("*************************************************************");
+        return super.exchangeSessionToken(uriInfo, event, authorizedClient, tokenUserSession, tokenSubject);
+    }
+
+    @Override
+    protected String getUsernameFromUserInfo(JsonNode userInfo) {
+        logger.info("*************************************************************");
+        logger.info("Calling getUsernameFromUserInfo() in Google IDP.");
+        logger.info("userInfo: " + userInfo);
+        logger.info("*************************************************************");
+        return super.getUsernameFromUserInfo(userInfo);
+    }
+
+    @Override
+    protected Response exchangeStoredToken(UriInfo uriInfo, EventBuilder event, ClientModel authorizedClient,
+            UserSessionModel tokenUserSession, UserModel tokenSubject) {
+        logger.info("*************************************************************");
+        logger.info("Calling exchangeStoredToken() in Google IDP.");
+        logger.info("tokenUserSession: " + tokenUserSession);
+        logger.info("tokenSubject: " + tokenSubject);
+        logger.info("*************************************************************");
+        return super.exchangeStoredToken(uriInfo, event, authorizedClient, tokenUserSession, tokenSubject);
+    }
+
+    private void getGroupInformation(String token) {
+        logger.info("*************************************************************");
+        logger.info("Calling validateExternalTokenThroughUserInfo() in Google IDP.");
+        logger.info("*************************************************************");
+        
         GoogleIdentityProviderConfig config = (GoogleIdentityProviderConfig)getConfig();
 
         logger.info("Attempting to get group info. Default Scope: " + config.getDefaultScope().toString());
 
-        // if (config.getDefaultScope().contains(GROUP_SCOPE)) {
-            context = extractGroupInfo(profile, subjectToken, event, context);
-        // }        
+        // if (!config.getDefaultScope().contains(GROUP_SCOPE)) {
+        //     return;
+        // }
         
-        return context;
-    }
-
-    private BrokeredIdentityContext extractGroupInfo(JsonNode userProfile, String subjectToken, EventBuilder event, BrokeredIdentityContext user) {
-
-        // Get group info from endpoint
-        SimpleHttp.Response response = null;
-        int status = 0;
-
-        try {
-            response = SimpleHttp.doGet(GROUPS_URL, session)
-                        .header("Authorization", "Bearer " + subjectToken).asResponse();
-            status = response.getStatus();
-            logger.info("Getting Google group info from endpoint. Status: " + status);
-            logger.info("Response: " + response.asString());
-        }
-        catch (IOException e) {
-            logger.debug("Failed to invoke group info", e);
-        }
-
-        if (status != 200) {
-            logger.debug("Failed to invoke group info status: " + status);
-            event.detail(Details.REASON, "group info call failure");
-            event.error(Errors.INVALID_TOKEN);
-            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
-        }
-
-        // convert group info response into JSON object
-        JsonNode groupProfile = null;
-
-        try {
-            groupProfile = response.asJson();
-        } catch (IOException e) {
-            logger.debug("Failed to invoke group info as JSON", e);
-            event.detail(Details.REASON, "group info call failure");
-            event.error(Errors.INVALID_TOKEN);
-            throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
-        }
-
-        List<String> groups = new ArrayList<String>();
-
-        for (JsonNode groupNode : groupProfile.get("groups")) {
-            groups.add(groupNode.get("id").asText());
-        }
-        
-        user.setUserAttribute(ATTRIBUTE_GOOGLE_GROUP, groups);
-        return user;
+         // Get group info from endpoint
+         SimpleHttp.Response response = null;
+         int status = 0;
+ 
+         try {
+             response = SimpleHttp.doGet(GROUPS_URL + "?userKey=josue.lopes@randoli.ca", session)
+                         .header("Authorization", "Bearer " + token).asResponse();
+             status = response.getStatus();
+             logger.info("Getting Google group info from endpoint. Status: " + status);
+             logger.info("Response: " + response.asString());
+         }
+         catch (IOException e) {
+             logger.debug("Failed to invoke group info", e);
+         }
+ 
+         if (status != 200) {
+             logger.debug("Failed to invoke group info status: " + status);
+         }
+ 
+        //  // convert group info response into JSON object
+        //  JsonNode groupProfile = null;
+ 
+        //  try {
+        //      groupProfile = response.asJson();
+        //  } catch (IOException e) {
+        //      logger.debug("Failed to invoke group info as JSON", e);
+        //      event.detail(Details.REASON, "group info call failure");
+        //      event.error(Errors.INVALID_TOKEN);
+        //      throw new ErrorResponseException(OAuthErrorException.INVALID_TOKEN, "invalid token", Response.Status.BAD_REQUEST);
+        //  }
+ 
+        //  List<String> groups = new ArrayList<String>();
+ 
+        //  for (JsonNode groupNode : groupProfile.get("groups")) {
+        //      groups.add(groupNode.get("id").asText());
+        //  }
+         
+        //  user.setUserAttribute(ATTRIBUTE_GOOGLE_GROUP, groups);
+        //  return user;
     }
 }
